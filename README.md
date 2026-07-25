@@ -9,8 +9,6 @@
 
 换墨是一款轻量级的文档转 PDF 本地工具。支持 Markdown、TXT、Word 文档，拖入即转，自动适配系统中文字体。无需联网，无需配置，一个 Python 脚本即可运行。
 
-HuanMo is a lightweight local document-to-PDF converter. Supports Markdown, TXT, and Word documents. Drag in, convert, done — with automatic Chinese font detection. No internet, no configuration, just a single Python script.
-
 ## 支持格式
 
 | 输入格式 | 说明 |
@@ -19,43 +17,34 @@ HuanMo is a lightweight local document-to-PDF converter. Supports Markdown, TXT,
 | `.txt` `.text` | 纯文本文件，保留原始排版 |
 | `.docx` | Word 文档，保留标题层级、粗体斜体、表格 |
 
-输出格式统一为 PDF。
-
-## 特性
-
-- **中文优先** — 自动检测 macOS / Linux / Windows 系统中的 CJK 字体
-- **多格式** — Markdown / TXT / DOCX 一键转 PDF
-- **保留排版** — 标题、表格、列表、粗体斜体完整保留
-- **拖拽即用** — 浏览器界面，拖入文件即可转换
-- **单文件架构** — 全部逻辑在一个 Python 脚本中，无数据库、无配置
-- **完全离线** — 不依赖任何外部服务，数据不出本地
-
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.9+
-- macOS / Windows / Linux
+- Python 3.9+（macOS 已自带，Windows 需从 [python.org](https://www.python.org) 下载）
 
 ### 安装与启动
 
 ```bash
-# 1. 下载本项目
+# 1. 下载项目
 git clone https://github.com/yourname/huanmo.git
-cd huanmo
+cd huanmo/md2pdf_app
 
-# 2. 安装依赖（仅首次）
+# 2. 安装依赖（首次需要，约 10 秒）
 pip install -r requirements.txt
 
 # 3. 启动
 python3 app.py
 ```
 
+> `requirements.txt` 列出了项目用到的第三方 Python 库（Flask、fpdf2 等）。
+> 这些库的代码不在本项目里，需要用 pip 从网络下载安装。只需装一次。
+
 浏览器自动打开 `http://127.0.0.1:5199`，拖入文件即可。
 
-**macOS 用户**也可双击 `启动.command` 一键启动。
+**macOS 用户**也可双击 `启动.command` 一键启动（首次会自动安装依赖）。
 
-**Windows 用户**可双击 `启动.bat`（需先安装 Python 3）。
+**Windows 用户**可双击 `启动.bat`（需先安装 Python 3，启动时会自动装依赖）。
 
 ## 使用说明
 
@@ -68,6 +57,12 @@ python3 app.py
 | 结果列表 | 显示转换结果，点击「打开」查看 PDF |
 
 ## 常见问题
+
+**Q: `pip install` 是什么？为什么不直接把依赖放在项目里？**
+
+换墨依赖了几个开源 Python 库（Flask 做网页、fpdf2 生成 PDF 等）。`requirements.txt` 是购物清单，`pip install -r requirements.txt` 就是照单采购。不把这些库的代码打包进项目是因为：
+- 保持项目体积小（只有自己的代码）
+- 依赖库各自独立更新，有问题可以单独升级
 
 **Q: macOS 双击 `启动.command` 提示"无法打开"？**
 
@@ -85,19 +80,20 @@ sudo apt install fonts-wqy-zenhei
 
 编辑 `app.py`，将底部 `port = 5199` 改为其他端口号。
 
-**Q: DOCX 转换后表格错乱？**
+**Q: DOCX 转换后格式不对？**
 
-python-docx 对复杂表格（合并单元格等）支持有限。简单表格可正常转换。
+python-docx 对复杂表格（合并单元格等）和图片不支持。简单文档可正常转换。
 
 ## 项目结构
 
 ```
 huanmo/
-├── app.py            # 主程序（Flask + 前端 + 转换引擎）
-├── requirements.txt  # Python 依赖
-├── 启动.command       # macOS 一键启动
-├── 启动.bat           # Windows 一键启动
-└── README.md         # 本文件
+├── README.md
+└── md2pdf_app/
+    ├── app.py            # 主程序（Flask + 前端 + 转换引擎，约 700 行）
+    ├── requirements.txt  # Python 依赖清单
+    ├── 启动.command       # macOS 一键启动
+    └── 启动.bat           # Windows 一键启动
 ```
 
 ## 技术栈
