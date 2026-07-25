@@ -1,91 +1,105 @@
-# md2pdf — Markdown → PDF 转换器
-
-拖拽 `.md` 文件 → 点转换 → 得到排版精美的 PDF。中文字体自动适配。
+<p align="center">
+  <h1 align="center">换墨 · HuanMo</h1>
+  <p align="center">Markdown → PDF · 中文字体自动适配 · 开箱即用</p>
+</p>
 
 ---
 
-## 使用方法
+## 简介
 
-### 🖥 对方也是 Mac
+换墨是一款轻量级的 Markdown 转 PDF 本地工具。拖入 `.md` 文件，一键生成排版精美的 PDF，自动适配系统中文字体。无需联网，无需配置，一个 Python 脚本即可运行。
 
-将整个 `md2pdf_app` 文件夹发给对方，对方：
+HuanMo is a lightweight local tool that converts Markdown files to PDF with automatic Chinese font detection. Drag in your `.md` files, click convert, and get a beautifully formatted PDF. No internet, no configuration — just a single Python script.
 
-1. **双击 `启动.command`**（首次可能需右键 → 打开）
-2. 首次运行会自动安装依赖（需要网络，约 10 秒）
-3. 浏览器自动打开界面
-4. 拖入 `.md` 文件，点「开始转换」
+![screenshot](https://via.placeholder.com/800x500/f5f5f7/1d1d1f?text=HuanMo+UI)
 
-### 🪟 对方是 Windows
+## 特性
 
-1. 安装 [Python 3](https://www.python.org/downloads/)（勾选 "Add to PATH"）
-2. **双击 `启动.bat`**
-3. 浏览器自动打开界面
+- **中文优先** — 自动检测 macOS / Linux / Windows 系统中的 CJK 字体
+- **保留排版** — 标题层级、表格、列表、代码块、引用块完整保留
+- **拖拽即用** — 浏览器界面，拖入文件即可转换
+- **单文件架构** — 全部逻辑在一个 Python 脚本中，无数据库、无配置
+- **完全离线** — 不依赖任何外部服务，数据不出本地
 
-### 🐧 对方是 Linux
+## 快速开始
+
+### 环境要求
+
+- Python 3.9+
+- macOS / Windows / Linux
+
+### 安装与启动
 
 ```bash
-cd md2pdf_app
+# 1. 克隆或下载本项目
+git clone https://github.com/yourname/huanmo.git
+cd huanmo
+
+# 2. 安装依赖（仅首次）
 pip install -r requirements.txt
+
+# 3. 启动
 python3 app.py
 ```
 
----
+浏览器自动打开 `http://127.0.0.1:5199`，拖入 `.md` 文件即可。
 
-## 分发方式
+**macOS 用户**也可双击 `启动.command` 一键启动。
 
-### 方式一：直接发文件夹（推荐）
+**Windows 用户**可双击 `启动.bat`（需先安装 Python 3）。
 
-把 `md2pdf_app` 文件夹压缩成 zip 发给对方，对方解压后双击启动。
-
-### 方式二：GitHub 下载
-
-如果放在 GitHub 上，对方 clone 后：
-
-```bash
-cd md2pdf_app
-pip install -r requirements.txt
-python3 app.py
-```
-
-### 方式三：U 盘 / 内网共享
-
-整个文件夹拷贝即可，无需安装任何东西（除了 Python 3）。
-
----
-
-## 界面说明
+## 使用说明
 
 | 区域 | 功能 |
 |------|------|
 | 拖拽区 | 拖入 `.md` 文件或点击选择 |
-| 文件列表 | 查看已选文件，点「移除」删掉不要的 |
+| 文件列表 | 查看已选文件，点「移除」删掉不需要的 |
 | 输出目录 | PDF 保存位置，默认 `~/Downloads` |
 | 转换按钮 | 一键批量转换 |
-| 结果列表 | 显示每个文件的转换结果 + 打开按钮 |
-
----
+| 结果列表 | 显示转换结果，点击「打开」查看 PDF |
 
 ## 常见问题
 
-**Q: 双击 `启动.command` 提示"无法打开"？**
-A: 右键点击 → 按住 Option 键 → 「打开」→ 「打开」。只需一次，之后正常双击即可。
+**Q: macOS 双击 `启动.command` 提示"无法打开"？**
 
-**Q: 中文在 PDF 里显示为方块？**
-A: 系统缺少中文字体。Mac/Windows 一般都有，Linux 需安装：
+右键点击文件 → 按住 `Option` 键 →「打开」→「打开」。只需操作一次。
+
+**Q: PDF 里中文显示为方块？**
+
+系统缺少中文字体。macOS / Windows 一般已自带。Linux 用户请安装：
+
 ```bash
 sudo apt install fonts-wqy-zenhei
 ```
 
-**Q: 如何改端口？**
-A: 编辑 `app.py`，找到 `port = 5199` 改成别的数字。
+**Q: 端口被占用？**
 
----
+编辑 `app.py`，将底部 `port = 5199` 改为其他端口号。
+
+**Q: 需要联网吗？**
+
+不需要。转换过程完全在本地完成，文件不会上传到任何地方。
+
+## 项目结构
+
+```
+huanmo/
+├── app.py            # 主程序（Flask + 前端 + 转换引擎）
+├── requirements.txt  # Python 依赖
+├── 启动.command       # macOS 一键启动
+├── 启动.bat           # Windows 一键启动
+└── README.md         # 本文件
+```
 
 ## 技术栈
 
 | 组件 | 用途 |
 |------|------|
-| Flask | Web 服务 |
-| markdown-it-py | Markdown 解析 |
-| fpdf2 | PDF 生成 |
-| 系统字体 | 中文渲染（自动检测） |
+| [Flask](https://github.com/pallets/flask) | Web 服务 |
+| [markdown-it-py](https://github.com/executablebooks/markdown-it-py) | Markdown 解析 |
+| [fpdf2](https://github.com/py-pdf/fpdf2) | PDF 生成 |
+| 系统 CJK 字体 | 中文渲染（自动检测） |
+
+## License
+
+MIT
