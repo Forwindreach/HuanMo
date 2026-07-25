@@ -27,13 +27,10 @@
 
 ```bash
 # 1. 下载项目
-git clone https://github.com/yourname/huanmo.git
-cd huanmo/md2pdf_app
+https://github.com/Forwindreach/HuanMo.git
+cd 文件路径（复制你自己电脑上的文件路径）
 
-# 2. 安装依赖（首次需要，约 10 秒）
-pip install -r requirements.txt
-
-# 3. 启动
+# 2. 启动
 python3 app.py
 ```
 
