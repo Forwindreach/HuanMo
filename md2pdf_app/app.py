@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-换墨 — Markdown → PDF 转换器
-启动后自动打开浏览器，拖拽 .md 文件即可转换。
+换墨 — 文档格式转换器
+支持 Markdown / TXT / DOCX → PDF
+启动后自动打开浏览器，拖拽文件即可转换。
 """
 
 from __future__ import annotations
@@ -92,6 +93,8 @@ def convert_md_to_pdf_bytes(md_text: str, title: str, font_path: str) -> bytes:
     pdf = FPDF()
     pdf.add_font(_FPDF_FONT_NAME, style="", fname=font_path)
     pdf.add_font(_FPDF_FONT_NAME, style="B", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="I", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="BI", fname=font_path)
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.set_left_margin(25)
     pdf.set_right_margin(25)
@@ -121,6 +124,137 @@ def convert_md_to_pdf_bytes(md_text: str, title: str, font_path: str) -> bytes:
         return Path(tmp.name).read_bytes()
     finally:
         os.unlink(tmp.name)
+
+
+def convert_txt_to_pdf_bytes(text: str, title: str, font_path: str) -> bytes:
+    """Convert plain text to PDF, preserving whitespace."""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    full_html = f"<h1>{title}</h1><hr><pre>{escaped}</pre>"
+
+    pdf = FPDF()
+    pdf.add_font(_FPDF_FONT_NAME, style="", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="B", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="I", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="BI", fname=font_path)
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_left_margin(25)
+    pdf.set_right_margin(25)
+    pdf.add_page()
+
+    import io as _io
+    _stderr_ctx = (
+        __import__("contextlib").redirect_stderr(_io.StringIO())
+        if not os.environ.get("MD2PDF_DEBUG")
+        else __import__("contextlib").nullcontext()
+    )
+    with _stderr_ctx:
+        pdf.write_html(
+            full_html,
+            font_family=_FPDF_FONT_NAME,
+            tag_styles={
+                "pre": TextStyle(font_family=_FPDF_FONT_NAME, font_size_pt=11),
+            },
+        )
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    try:
+        pdf.output(tmp.name)
+        tmp.close()
+        return Path(tmp.name).read_bytes()
+    finally:
+        os.unlink(tmp.name)
+
+
+def convert_docx_to_pdf_bytes(docx_bytes: bytes, title: str, font_path: str) -> bytes:
+    """Convert a .docx file to PDF via python-docx → HTML."""
+    from io import BytesIO
+    from docx import Document
+
+    doc = Document(BytesIO(docx_bytes))
+
+    html_parts = [f"<h1>{title}</h1><hr>"]
+
+    for para in doc.paragraphs:
+        text = para.text
+        if not text.strip():
+            html_parts.append("<br>")
+            continue
+
+        # Detect heading style
+        style_name = para.style.name if para.style else ""
+        if style_name.startswith("Heading"):
+            level = style_name.replace("Heading", "").strip()
+            try:
+                lv = int(level)
+            except ValueError:
+                lv = 2
+            lv = max(1, min(6, lv))
+            html_parts.append(f"<h{lv}>{_escape_html(text)}</h{lv}>")
+            continue
+
+        # Inline formatting
+        runs_html = []
+        for run in para.runs:
+            t = _escape_html(run.text)
+            if not t:
+                continue
+            if run.bold:
+                t = f"<b>{t}</b>"
+            if run.italic:
+                t = f"<i>{t}</i>"
+            runs_html.append(t)
+        para_html = "".join(runs_html) if runs_html else _escape_html(text)
+        html_parts.append(f"<p>{para_html}</p>")
+
+    # Tables
+    for table in doc.tables:
+        html_parts.append('<table border="1">')
+        for row in table.rows:
+            html_parts.append("<tr>")
+            for cell in row.cells:
+                html_parts.append(f"<td>{_escape_html(cell.text)}</td>")
+            html_parts.append("</tr>")
+        html_parts.append("</table>")
+        html_parts.append("<br>")
+
+    full_html = "".join(html_parts)
+
+    pdf = FPDF()
+    pdf.add_font(_FPDF_FONT_NAME, style="", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="B", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="I", fname=font_path)
+    pdf.add_font(_FPDF_FONT_NAME, style="BI", fname=font_path)
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_left_margin(25)
+    pdf.set_right_margin(25)
+    pdf.add_page()
+
+    import io as _io
+    _stderr_ctx = (
+        __import__("contextlib").redirect_stderr(_io.StringIO())
+        if not os.environ.get("MD2PDF_DEBUG")
+        else __import__("contextlib").nullcontext()
+    )
+    with _stderr_ctx:
+        pdf.write_html(
+            full_html,
+            font_family=_FPDF_FONT_NAME,
+            tag_styles={
+                "pre": TextStyle(font_family=_FPDF_FONT_NAME, font_size_pt=11),
+            },
+        )
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    try:
+        pdf.output(tmp.name)
+        tmp.close()
+        return Path(tmp.name).read_bytes()
+    finally:
+        os.unlink(tmp.name)
+
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 # ── Flask App ─────────────────────────────────────────────────
@@ -287,14 +421,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>换墨</h1>
-  <p class="subtitle">Markdown → PDF · 中文字体自动检测</p>
+  <p class="subtitle">Markdown / TXT / DOCX → PDF · 中文字体自动检测</p>
 
   <!-- Drop zone -->
   <div class="drop-zone" id="dropZone">
     <div class="icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#86868b" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg></div>
-    <p>拖拽 <strong>.md 文件</strong> 到此处<br>或 <span class="browse">点击浏览</span></p>
+    <p>拖拽 <strong>.md / .txt / .docx 文件</strong> 到此处<br>或 <span class="browse">点击浏览</span></p>
   </div>
-  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text" multiple>
+  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.docx" multiple>
 
   <!-- File list -->
   <div class="file-list" id="fileList">
@@ -355,7 +489,7 @@ fileInput.addEventListener('change', () => {
 
 function addFiles(fileList) {
   for (const f of fileList) {
-    if (!f.name.endsWith('.md') && !f.name.endsWith('.markdown') && !f.name.endsWith('.txt') && !f.name.endsWith('.text')) continue;
+    if (!f.name.endsWith('.md') && !f.name.endsWith('.markdown') && !f.name.endsWith('.txt') && !f.name.endsWith('.text') && !f.name.endsWith('.docx')) continue;
     const reader = new FileReader();
     reader.onload = () => {
       files.set(f.name, reader.result.split(',')[1]); // base64 content
@@ -486,9 +620,15 @@ def convert():
     b64_content = data.get("content", "")
     output_dir = data.get("output_dir", OUTPUT_DIR)
 
-    # Decode base64
+    ext = Path(name).suffix.lower()
+
+    # Decode base64 — text for md/txt, binary for docx
     try:
-        md_text = base64.b64decode(b64_content).decode("utf-8")
+        raw_bytes = base64.b64decode(b64_content)
+        if ext == ".docx":
+            text = None  # binary, handled separately
+        else:
+            text = raw_bytes.decode("utf-8")
     except Exception as e:
         return jsonify({"error": f"文件解码失败: {e}"}), 400
 
@@ -504,11 +644,16 @@ def convert():
     except OSError as e:
         return jsonify({"error": f"无法创建输出目录: {e}"}), 400
 
-    # Strip .md extension for title
+    # Determine file type and convert
     title = Path(name).stem.replace("_", " ")
 
     try:
-        pdf_bytes = convert_md_to_pdf_bytes(md_text, title, font)
+        if ext == ".txt":
+            pdf_bytes = convert_txt_to_pdf_bytes(text, title, font)
+        elif ext == ".docx":
+            pdf_bytes = convert_docx_to_pdf_bytes(raw_bytes, title, font)
+        else:
+            pdf_bytes = convert_md_to_pdf_bytes(text, title, font)
     except Exception as e:
         return jsonify({"error": f"转换失败: {e}"}), 500
 
