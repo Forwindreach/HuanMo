@@ -11,7 +11,6 @@
 
 HuanMo is a lightweight local tool that converts Markdown files to PDF with automatic Chinese font detection. Drag in your `.md` files, click convert, and get a beautifully formatted PDF. No internet, no configuration — just a single Python script.
 
-![screenshot](https://via.placeholder.com/800x500/f5f5f7/1d1d1f?text=HuanMo+UI)
 
 ## 特性
 
