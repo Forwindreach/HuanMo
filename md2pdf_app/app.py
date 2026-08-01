@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 换墨 — 文档格式转换器
-支持 Markdown / TXT / DOCX → PDF
+支持 Markdown / TXT / DOCX → PDF，以及 PDF 合并
 启动后自动打开浏览器，拖拽文件即可转换。
 """
 
@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from io import BytesIO
 from pathlib import Path
 
 # ── Dependencies ──────────────────────────────────────────────
@@ -33,6 +34,20 @@ try:
     from fpdf import FPDF, TextStyle
 except ImportError:
     sys.exit("需要 fpdf2: pip install fpdf2")
+
+try:
+    from pypdf import PdfReader, PdfWriter
+except ImportError:
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+    except ImportError:
+        PdfReader = None
+        PdfWriter = None
+
+try:
+    import pypdfium2 as pdfium
+except ImportError:
+    pdfium = None
 
 # ── Logging ───────────────────────────────────────────────────
 logging.getLogger("fpdf").setLevel(logging.ERROR)
@@ -257,6 +272,63 @@ def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def merge_pdf_bytes(pdf_items: list[tuple[str, bytes]]) -> bytes:
+    """Merge multiple PDF files into one, preserving page order."""
+    if PdfReader is None or PdfWriter is None:
+        raise RuntimeError("需要 pypdf: pip install pypdf 或 PyPDF2")
+
+    writer = PdfWriter()
+    for name, raw in pdf_items:
+        reader = PdfReader(BytesIO(raw))
+        if getattr(reader, "is_encrypted", False):
+            raise ValueError(f"{name} 已加密，无法合并")
+        if not reader.pages:
+            raise ValueError(f"{name} 没有可合并的页面")
+        for page in reader.pages:
+            writer.add_page(page)
+
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def merge_selected_pages(pdf_items: list[tuple[str, bytes]], order: list[tuple[str, int]]) -> bytes:
+    """Merge only the selected pages, in the given order."""
+    if PdfReader is None or PdfWriter is None:
+        raise RuntimeError("需要 pypdf: pip install pypdf 或 PyPDF2")
+
+    readers = {name: PdfReader(BytesIO(raw)) for name, raw in pdf_items}
+    writer = PdfWriter()
+    for name, page_index in order:
+        reader = readers[name]
+        if getattr(reader, "is_encrypted", False):
+            raise ValueError(f"{name} 已加密，无法合并")
+        writer.add_page(reader.pages[page_index])
+
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def render_page_preview(pdf_bytes: bytes, page_index: int, max_width: int = 560) -> bytes | None:
+    """Render one PDF page as a PNG preview."""
+    if pdfium is None:
+        return None
+    pdf = pdfium.PdfDocument(BytesIO(pdf_bytes))
+    try:
+        page = pdf[page_index]
+        bitmap = page.render(scale=2.0)
+        pil = bitmap.to_pil()
+        if pil.width > max_width:
+            ratio = max_width / pil.width
+            pil = pil.resize((max_width, round(pil.height * ratio)))
+        out = BytesIO()
+        pil.save(out, format="PNG")
+        return out.getvalue()
+    finally:
+        pdf.close()
+
+
 # ── Flask App ─────────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -296,6 +368,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: -0.5px;
   }
   .subtitle { text-align: center; color: var(--secondary); font-size: 14px; margin-bottom: 32px; }
+
+  /* Mode switch */
+  .mode-switch {
+    display: flex; gap: 8px; justify-content: center;
+    margin-bottom: 20px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; padding: 4px;
+  }
+  .mode-btn {
+    flex: 1; padding: 8px 12px; border: none; border-radius: 7px;
+    background: transparent; color: var(--secondary);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .mode-btn:hover { color: var(--text); }
+  .mode-btn.active { background: var(--accent); color: #fff; }
 
   /* Drop zone */
   .drop-zone {
@@ -409,6 +496,64 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .result-item.error .status { color: #ff3b30; }
   .result-item.error .info { color: #ff3b30; }
 
+  /* Page editor (merge mode) */
+  .page-editor { display: none; margin-bottom: 20px; }
+  .page-editor.visible { display: block; }
+  .page-editor-header {
+    font-size: 13px; font-weight: 600;
+    color: var(--secondary); text-transform: uppercase;
+    padding: 14px 20px 8px; background: var(--card);
+    border-radius: 10px 10px 0 0; border-bottom: 1px solid #f0f0f0;
+  }
+  .page-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 10px; background: var(--card); padding: 14px;
+    border-radius: 0 0 10px 10px;
+  }
+  .page-card {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px; cursor: grab; position: relative;
+    background: #fff; transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .page-card:hover { border-color: var(--accent); }
+  .page-card.dragging { opacity: 0.45; }
+  .page-card.drop-target { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,113,227,0.18); }
+  .page-card img, .page-placeholder {
+    width: 100%; aspect-ratio: 210 / 297; object-fit: contain;
+    background: #fff; border: 1px solid #eee; border-radius: 6px;
+  }
+  .page-placeholder { display: flex; align-items: center; justify-content: center; color: var(--secondary); font-size: 12px; }
+  .page-meta { font-size: 11px; color: var(--secondary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page-delete {
+    position: absolute; top: 4px; right: 4px; width: 22px; height: 22px;
+    border: none; border-radius: 6px; background: rgba(255,255,255,0.94);
+    color: #ff3b30; font-size: 15px; line-height: 1; cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+  }
+  .page-delete:hover { background: #fff0f0; }
+  .page-empty {
+    grid-column: 1 / -1; text-align: center;
+    color: var(--secondary); font-size: 14px; padding: 24px 0;
+  }
+  .file-item .file-info { font-size: 12px; color: var(--secondary); white-space: nowrap; }
+
+  /* Lightbox */
+  .lightbox {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: rgba(0,0,0,0.55); align-items: center; justify-content: center;
+    padding: 30px;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img {
+    max-width: 92vw; max-height: 88vh; background: #fff;
+    border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  }
+  .lightbox-close {
+    position: absolute; top: 18px; right: 22px; border: none;
+    background: rgba(255,255,255,0.92); border-radius: 8px;
+    padding: 8px 14px; font-size: 14px; cursor: pointer;
+  }
+
   /* Footer */
   .footer {
     text-align: center; color: var(--secondary);
@@ -421,19 +566,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>换墨</h1>
-  <p class="subtitle">Markdown / TXT / DOCX → PDF · 中文字体自动检测</p>
+  <p class="subtitle">Markdown / TXT / DOCX → PDF · PDF 合并 · 中文字体自动检测</p>
+
+  <div class="mode-switch" id="modeSwitch">
+    <button type="button" class="mode-btn active" data-mode="convert">文档转 PDF</button>
+    <button type="button" class="mode-btn" data-mode="merge">合并 PDF</button>
+  </div>
 
   <!-- Drop zone -->
   <div class="drop-zone" id="dropZone">
     <div class="icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#86868b" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg></div>
-    <p>拖拽 <strong>.md / .txt / .docx 文件</strong> 到此处<br>或 <span class="browse">点击浏览</span></p>
+    <p>拖拽 <strong id="dropHint">.md / .txt / .docx 文件</strong> 到此处<br>或 <span class="browse">点击浏览</span></p>
   </div>
-  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.docx" multiple>
+  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.docx,.pdf" multiple>
 
   <!-- File list -->
   <div class="file-list" id="fileList">
     <div class="file-list-header">已选文件 (<span id="fileCount">0</span>)</div>
     <div id="fileItems"></div>
+  </div>
+
+  <!-- Page editor (merge mode) -->
+  <div class="page-editor" id="pageEditor">
+    <div class="page-editor-header">合并页面（<span id="pageCount">0</span> 页）· 拖拽排序 · 点击 × 删除</div>
+    <div class="page-list" id="pageList"></div>
   </div>
 
   <!-- Output dir -->
@@ -446,16 +602,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- Convert -->
   <button class="btn-convert" id="btnConvert" disabled>
     <span class="spinner">···</span>
-    <span class="btn-text">开始转换</span>
+    <span class="btn-text" id="btnText">开始转换</span>
   </button>
 
   <!-- Results -->
   <div class="results" id="results">
-    <div class="results-header">转换结果</div>
+    <div class="results-header" id="resultsHeader">转换结果</div>
     <div id="resultItems"></div>
   </div>
 
   <p class="footer">换墨 · macOS / Linux / Windows</p>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose">关闭</button>
+  <img id="lightboxImg" alt="页面预览">
 </div>
 
 <script>
@@ -468,8 +629,57 @@ const btnConvert = document.getElementById('btnConvert');
 const outputDir = document.getElementById('outputDir');
 const results = document.getElementById('results');
 const resultItems = document.getElementById('resultItems');
+const modeSwitch = document.getElementById('modeSwitch');
+const dropHint = document.getElementById('dropHint');
+const btnText = document.getElementById('btnText');
+const resultsHeader = document.getElementById('resultsHeader');
+const pageEditor = document.getElementById('pageEditor');
+const pageList = document.getElementById('pageList');
+const pageCountEl = document.getElementById('pageCount');
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightboxImg');
+const lightboxClose = document.getElementById('lightboxClose');
 
 let files = new Map(); // name -> content (base64)
+let mode = 'convert';
+let pdfMeta = new Map(); // name -> {pages, token, preview}
+let pageOrder = [];      // {id, file, page}
+let dragId = null;
+let dropTargetId = null;
+let dropAfter = false;
+
+function setMode(nextMode) {
+  mode = nextMode;
+  modeSwitch.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+
+  if (mode === 'merge') {
+    dropHint.textContent = '.pdf 文件（可多选）';
+    fileInput.accept = '.pdf';
+    btnText.textContent = '开始合并';
+    resultsHeader.textContent = '合并结果';
+    pageEditor.classList.add('visible');
+  } else {
+    dropHint.textContent = '.md / .txt / .docx 文件';
+    fileInput.accept = '.md,.markdown,.txt,.text,.docx';
+    btnText.textContent = '开始转换';
+    resultsHeader.textContent = '转换结果';
+    pageEditor.classList.remove('visible');
+  }
+
+  files.clear();
+  pdfMeta.clear();
+  pageOrder = [];
+  renderFileList();
+  renderMergeList();
+  resultItems.innerHTML = '';
+  results.classList.remove('has-results');
+}
+
+modeSwitch.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => setMode(btn.dataset.mode));
+});
 
 // ── File handling ─────────────────────────────────────────
 dropZone.addEventListener('click', () => fileInput.click());
@@ -487,9 +697,14 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-function addFiles(fileList) {
+async function addFiles(fileList) {
+  if (mode === 'merge') {
+    await addPdfFiles(fileList);
+    return;
+  }
+
   for (const f of fileList) {
-    if (!f.name.endsWith('.md') && !f.name.endsWith('.markdown') && !f.name.endsWith('.txt') && !f.name.endsWith('.text') && !f.name.endsWith('.docx')) continue;
+    if (!isAccepted(f.name)) continue;
     const reader = new FileReader();
     reader.onload = () => {
       files.set(f.name, reader.result.split(',')[1]); // base64 content
@@ -499,40 +714,204 @@ function addFiles(fileList) {
   }
 }
 
+async function addPdfFiles(fileList) {
+  for (const f of fileList) {
+    if (!f.name.toLowerCase().endsWith('.pdf')) continue;
+    if (files.has(f.name)) {
+      alert(`已存在同名文件：${f.name}`);
+      continue;
+    }
+
+    const reader = new FileReader();
+    const b64 = await new Promise(resolve => {
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.readAsDataURL(f);
+    });
+
+    files.set(f.name, b64);
+    renderFileList();
+
+    try {
+      const resp = await fetch('/analyze-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: f.name, content: b64 }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || '读取失败');
+
+      pdfMeta.set(f.name, data);
+      for (let i = 0; i < data.pages; i++) {
+        pageOrder.push({ id: `${f.name}::${i}`, file: f.name, page: i });
+      }
+    } catch (err) {
+      alert(`${f.name} 读取失败：${err.message}`);
+      files.delete(f.name);
+      pdfMeta.delete(f.name);
+      pageOrder = pageOrder.filter(p => p.file !== f.name);
+    }
+
+    renderFileList();
+    renderMergeList();
+  }
+}
+
+function isAccepted(name) {
+  const lower = name.toLowerCase();
+  if (mode === 'merge') return lower.endsWith('.pdf');
+  return lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt') || lower.endsWith('.text') || lower.endsWith('.docx');
+}
+
 function renderFileList() {
   fileItems.innerHTML = '';
   let i = 0;
   for (const [name] of files) {
     const div = document.createElement('div');
     div.className = 'file-item';
+    let extra = '';
+    if (mode === 'merge') {
+      const meta = pdfMeta.get(name);
+      const kept = pageOrder.filter(p => p.file === name).length;
+      extra = meta ? `${meta.pages} 页 · 保留 ${kept} 页` : '读取中…';
+    }
     div.innerHTML = `
-      <div class="name"><span>${esc(name)}</span></div>
+      <div class="name"><span>${esc(name)}</span><span class="file-info">${extra}</span></div>
       <button class="remove" data-name="${esc(name)}">移除</button>
     `;
     fileItems.appendChild(div);
     i++;
   }
   fileCount.textContent = files.size;
-  if (files.size > 0) {
-    fileList.classList.add('has-files');
-    btnConvert.disabled = false;
-  } else {
-    fileList.classList.remove('has-files');
-    btnConvert.disabled = true;
-  }
+  const ready = mode === 'merge' ? (files.size >= 2 && pageOrder.length > 0) : files.size > 0;
+  fileList.classList.toggle('has-files', files.size > 0);
+  btnConvert.disabled = !ready;
 
   // Bind remove buttons
   fileItems.querySelectorAll('.remove').forEach(btn => {
     btn.addEventListener('click', () => {
       files.delete(btn.dataset.name);
+      pdfMeta.delete(btn.dataset.name);
+      pageOrder = pageOrder.filter(p => p.file !== btn.dataset.name);
       renderFileList();
+      renderMergeList();
     });
   });
 }
 
+function renderMergeList() {
+  pageCountEl.textContent = pageOrder.length;
+  pageList.innerHTML = '';
+  if (pageOrder.length === 0) {
+    pageList.innerHTML = '<div class="page-empty">暂无页面，请先添加 PDF 文件</div>';
+    return;
+  }
+
+  for (const p of pageOrder) {
+    const meta = pdfMeta.get(p.file);
+    const card = document.createElement('div');
+    card.className = 'page-card';
+    card.draggable = true;
+    card.dataset.id = p.id;
+
+    let preview;
+    if (meta && meta.preview) {
+      preview = `<img src="/page-preview/${encodeURIComponent(meta.token)}/${p.page}" alt="${esc(p.file)} 第 ${p.page + 1} 页" loading="lazy">`;
+    } else {
+      preview = `<div class="page-placeholder">第 ${p.page + 1} 页</div>`;
+    }
+
+    card.innerHTML = `
+      ${preview}
+      <button class="page-delete" title="删除此页">×</button>
+      <div class="page-meta">${esc(p.file)} · ${p.page + 1} 页</div>
+    `;
+    pageList.appendChild(card);
+  }
+}
+
+// ── Page reorder & preview (merge mode) ──────────────────
+pageList.addEventListener('dragstart', e => {
+  const card = e.target.closest('.page-card');
+  if (!card) return;
+  dragId = card.dataset.id;
+  dropTargetId = null;
+  dropAfter = false;
+  card.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+});
+
+pageList.addEventListener('dragover', e => {
+  e.preventDefault();
+  const card = e.target.closest('.page-card');
+  if (!card || card.dataset.id === dragId) return;
+
+  pageList.querySelectorAll('.page-card').forEach(c => c.classList.remove('drop-target'));
+  card.classList.add('drop-target');
+  const rect = card.getBoundingClientRect();
+  dropAfter = (e.clientY - rect.top) > rect.height / 2;
+  dropTargetId = card.dataset.id;
+});
+
+pageList.addEventListener('drop', e => {
+  e.preventDefault();
+  pageList.querySelectorAll('.page-card').forEach(c => c.classList.remove('drop-target'));
+
+  const dragged = pageOrder.find(p => p.id === dragId);
+  const target = pageOrder.find(p => p.id === dropTargetId);
+  if (dragged && target && dragId !== dropTargetId) {
+    pageOrder = pageOrder.filter(p => p.id !== dragId);
+    const idx = pageOrder.indexOf(target);
+    pageOrder.splice(dropAfter ? idx + 1 : idx, 0, dragged);
+  }
+
+  dragId = null;
+  dropTargetId = null;
+  dropAfter = false;
+  renderMergeList();
+  renderFileList();
+});
+
+pageList.addEventListener('dragend', () => {
+  dragId = null;
+  dropTargetId = null;
+  dropAfter = false;
+  pageList.querySelectorAll('.page-card').forEach(c => c.classList.remove('dragging', 'drop-target'));
+  renderMergeList();
+  renderFileList();
+});
+
+pageList.addEventListener('click', e => {
+  const del = e.target.closest('.page-delete');
+  if (del) {
+    const id = del.closest('.page-card').dataset.id;
+    pageOrder = pageOrder.filter(p => p.id !== id);
+    renderMergeList();
+    renderFileList();
+    return;
+  }
+
+  const card = e.target.closest('.page-card');
+  if (!card) return;
+  const p = pageOrder.find(x => x.id === card.dataset.id);
+  const meta = p && pdfMeta.get(p.file);
+  if (p && meta && meta.preview) {
+    lightboxImg.src = `/page-preview/${encodeURIComponent(meta.token)}/${p.page}`;
+    lightbox.classList.add('open');
+  }
+});
+
+lightboxClose.addEventListener('click', () => lightbox.classList.remove('open'));
+lightbox.addEventListener('click', e => {
+  if (e.target === lightbox) lightbox.classList.remove('open');
+});
+
 // ── Convert ────────────────────────────────────────────────
 btnConvert.addEventListener('click', async () => {
   if (files.size === 0) return;
+  if (mode === 'merge') {
+    mergeFiles();
+    return;
+  }
 
   btnConvert.classList.add('loading');
   btnConvert.disabled = true;
@@ -578,6 +957,62 @@ btnConvert.addEventListener('click', async () => {
   btnConvert.classList.remove('loading');
   btnConvert.disabled = false;
 });
+
+async function mergeFiles() {
+  if (files.size < 2) {
+    alert('请至少选择两个 PDF 文件');
+    btnConvert.disabled = !(files.size >= 2 && pageOrder.length > 0);
+    return;
+  }
+  if (pageOrder.length === 0) {
+    alert('请至少保留一个页面');
+    btnConvert.disabled = true;
+    return;
+  }
+
+  btnConvert.classList.add('loading');
+  btnConvert.disabled = true;
+  results.classList.remove('has-results');
+  resultItems.innerHTML = '';
+
+  const dir = outputDir.value.trim() || '{{ output_dir }}';
+  const payload = {
+    files: [...files.entries()].map(([name, content]) => ({ name, content })),
+    order: pageOrder.map(p => ({ file: p.file, page: p.page })),
+    output_dir: dir,
+  };
+
+  const itemDiv = document.createElement('div');
+  itemDiv.className = 'result-item';
+  itemDiv.innerHTML = `<span class="status">·</span><div class="info"><div class="filename">合并中…</div><div class="size">按当前顺序合并 ${pageOrder.length} 页</div></div>`;
+  resultItems.appendChild(itemDiv);
+
+  try {
+    const resp = await fetch('/merge-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '合并失败');
+
+    itemDiv.innerHTML = `
+      <span class="status">&#10003;</span>
+      <div class="info"><div class="filename">${esc(data.filename)}</div><div class="size">${data.size_kb} KB</div></div>
+      <a class="open-btn" href="/download/${encodeURIComponent(data.token)}" target="_blank">打开</a>
+    `;
+  } catch (err) {
+    itemDiv.classList.add('error');
+    itemDiv.innerHTML = `
+      <span class="status">&#10007;</span>
+      <div class="info"><div class="filename">合并失败</div><div class="size">${esc(err.message)}</div></div>
+    `;
+  }
+
+  results.classList.add('has-results');
+  btnConvert.classList.remove('loading');
+  btnConvert.disabled = false;
+}
 
 // ── Output picker ─────────────────────────────────────────
 document.getElementById('pickOutput').addEventListener('click', async () => {
@@ -679,6 +1114,121 @@ def convert():
 _downloads: dict[str, str] = {}
 
 
+_PREVIEW_DIR = Path(tempfile.gettempdir()) / "huanmo_previews"
+_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+_preview_cache: dict[str, dict] = {}
+
+
+@app.route("/analyze-pdf", methods=["POST"])
+def analyze_pdf():
+    data = request.get_json()
+    name = data.get("name", "file.pdf")
+    b64_content = data.get("content", "")
+
+    try:
+        raw = base64.b64decode(b64_content)
+        reader = PdfReader(BytesIO(raw))
+        if getattr(reader, "is_encrypted", False):
+            return jsonify({"error": f"{name} 已加密，无法预览"}), 400
+        page_count = len(reader.pages)
+        if page_count == 0:
+            return jsonify({"error": f"{name} 没有可预览的页面"}), 400
+    except Exception as e:
+        return jsonify({"error": f"读取失败: {e}"}), 400
+
+    token = base64.urlsafe_b64encode(os.urandom(9)).decode("ascii").rstrip("=")
+    preview_dir = _PREVIEW_DIR / token
+    preview_ok = False
+    try:
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(page_count):
+            png = render_page_preview(raw, i)
+            if png is None:
+                break
+            (preview_dir / f"{i}.png").write_bytes(png)
+        preview_ok = (preview_dir / "0.png").is_file()
+    except Exception:
+        preview_ok = False
+
+    _preview_cache[token] = {"name": name, "dir": str(preview_dir)}
+    return jsonify({
+        "name": name,
+        "pages": page_count,
+        "token": token,
+        "preview": preview_ok,
+    })
+
+
+@app.route("/page-preview/<token>/<int:page>")
+def page_preview(token, page):
+    info = _preview_cache.get(token)
+    if not info:
+        return "预览不存在或已过期", 404
+    path = Path(info["dir"]) / f"{page}.png"
+    if not path.is_file():
+        return "预览不存在", 404
+    return send_file(path, mimetype="image/png")
+
+
+@app.route("/merge-pdf", methods=["POST"])
+def merge_pdf():
+    data = request.get_json()
+    items = data.get("files", [])
+    order = data.get("order")
+    output_dir = data.get("output_dir", OUTPUT_DIR)
+
+    if len(items) < 2:
+        return jsonify({"error": "请至少选择两个 PDF 文件"}), 400
+
+    try:
+        pdf_items = [
+            (item.get("name", "file.pdf"), base64.b64decode(item.get("content", "")))
+            for item in items
+        ]
+        if order is not None:
+            if not order:
+                return jsonify({"error": "请至少保留一个页面"}), 400
+            ordered: list[tuple[str, int]] = []
+            readers = {name: PdfReader(BytesIO(raw)) for name, raw in pdf_items}
+            for entry in order:
+                file_name = entry.get("file")
+                page_index = entry.get("page")
+                if file_name not in readers:
+                    raise ValueError(f"未知文件: {file_name}")
+                if not isinstance(page_index, int) or not 0 <= page_index < len(readers[file_name].pages):
+                    raise ValueError(f"{file_name} 页面索引无效")
+                ordered.append((file_name, page_index))
+            pdf_bytes = merge_selected_pages(pdf_items, ordered)
+        else:
+            pdf_bytes = merge_pdf_bytes(pdf_items)
+    except Exception as e:
+        return jsonify({"error": f"合并失败: {e}"}), 500
+
+    out_path = Path(output_dir)
+    try:
+        out_path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return jsonify({"error": f"无法创建输出目录: {e}"}), 400
+
+    first_stem = Path(items[0].get("name", "merged")).stem
+    pdf_name = f"{first_stem}_合并.pdf"
+    pdf_path = out_path / pdf_name
+    try:
+        pdf_path.write_bytes(pdf_bytes)
+    except OSError as e:
+        return jsonify({"error": f"写入文件失败: {e}"}), 500
+
+    token = base64.urlsafe_b64encode(str(pdf_path).encode()).decode()
+    _downloads[token] = str(pdf_path)
+
+    return jsonify({
+        "filename": pdf_name,
+        "size_kb": round(len(pdf_bytes) / 1024),
+        "token": token,
+        "files": len(items),
+    })
+
+
 @app.route("/download/<token>")
 def download(token):
     path = _downloads.get(token)
@@ -734,7 +1284,7 @@ def main():
     url = f"http://127.0.0.1:{port}"
 
     print("╔══════════════════════════════════════╗")
-    print("║       换墨 — Markdown → PDF          ║")
+    print("║      换墨 — 文档转换 + PDF 合并    ║")
     print("╠══════════════════════════════════════╣")
     print(f"║  浏览器地址: {url}          ║")
     print("║  按 Ctrl+C 停止服务                  ║")

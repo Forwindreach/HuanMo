@@ -19,7 +19,7 @@ fi
 
 # 安装依赖（如果需要）
 echo "📦 检查依赖..."
-python3 -m pip install -q flask markdown-it-py fpdf2 2>/dev/null
+python3 -m pip install -q -r requirements.txt 2>/dev/null
 
 # 启动
 echo "🚀 启动中..."

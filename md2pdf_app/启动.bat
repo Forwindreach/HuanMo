@@ -18,7 +18,7 @@ if %errorlevel% neq 0 (
 
 :: 安装依赖
 echo 📦 检查依赖...
-python -m pip install -q flask markdown-it-py fpdf2 2>nul
+python -m pip install -q -r requirements.txt 2>nul
 
 :: 启动
 echo 🚀 启动中...

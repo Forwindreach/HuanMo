@@ -1,2 +1,8 @@
 .DS_Store
 换墨开发日志/
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+.venv/
