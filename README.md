@@ -1,146 +1,102 @@
 <p align="center">
   <h1 align="center">换墨 · HuanMo</h1>
-  <p align="center">Markdown / TXT / DOCX → PDF · PDF 合并 · 中文字体自动适配 · 开箱即用</p>
+  <p align="center">文档转 PDF · PDF 合并 · 本地免费工具</p>
 </p>
 
 ---
 
-## 简介
+## 换墨是什么
 
-换墨是一款轻量级的文档处理本地工具。支持 Markdown、TXT、Word 文档转 PDF，也支持把多个 PDF 按顺序合并成一个文件。拖入即转，自动适配系统中文字体。无需联网，无需配置，一个 Python 脚本即可运行。
+换墨是一款完全在本地运行的文档处理工具，不需要联网：
 
-## 支持格式
+- Markdown / TXT / Word 文档一键转 PDF
+- 多个 PDF 按你的需要合并，支持页面预览、删除不需要的页、拖拽调整顺序
+- 自动使用系统中文字体，打开就能用
 
-| 输入格式 | 说明 |
-|----------|------|
-| `.md` `.markdown` | Markdown 文档，保留标题、表格、代码块、引用 |
-| `.txt` `.text` | 纯文本文件，保留原始排版 |
-| `.docx` | Word 文档，保留标题层级、粗体斜体、表格 |
-| `.pdf` | 多个 PDF 文件可逐页预览、删除不需要的页面、拖拽调整顺序后合并 |
+## 下载安装
 
-## 快速开始
+### 普通用户（推荐）
 
-### 环境要求
+去 GitHub Releases 页面下载成品，不需要安装 Python：
 
-- Python 3.9+（macOS 已自带，Windows 需从 [python.org](https://www.python.org) 下载）
+| 系统 | 下载 | 使用方法 |
+|------|------|----------|
+| macOS | `HuanMo-macOS.zip` | 解压后打开 `HuanMo.app` |
+| Windows | `HuanMo.exe` | 双击运行 |
 
-### 安装与启动
+下载地址：<https://github.com/Forwindreach/HuanMo/releases>
 
-```bash
-# 1. 下载项目
-https://github.com/Forwindreach/HuanMo.git
-cd 文件路径（复制你自己电脑上的文件路径）
+> macOS 首次打开如果提示“无法验证开发者”：右键点击 `HuanMo.app` → 选择「打开」→ 再点一次「打开」。
+>
+> Windows 首次运行如果出现 SmartScreen 提示：点击「更多信息」→「仍要运行」。
 
-# 2. 启动
-python3 app.py
-```
+### 从源码运行（可选）
 
-> `requirements.txt` 列出了项目用到的第三方 Python 库（Flask、fpdf2 等）。
-> 这些库的代码不在本项目里，需要用 pip 从网络下载安装。只需装一次。
+需要电脑已安装 Python 3.9+：
 
-浏览器自动打开 `http://127.0.0.1:5199`，拖入文件即可。
-
-**macOS 用户**也可双击 `启动.command` 一键启动（首次会自动安装依赖）。
-
-**Windows 用户**可双击 `启动.bat`（需先安装 Python 3，启动时会自动装依赖）。
-
-## 独立程序（免安装 Python）
-
-不想安装 Python 的用户可以直接到 GitHub Releases 下载成品，双击即可运行：
-
-- macOS：下载 `HuanMo-macOS.zip`，解压后打开 `HuanMo.app`
-- Windows：下载 `HuanMo-Windows.exe`，双击运行
-
-每次推送 `v1.0.0` 这类 tag，GitHub Actions 会自动打包两个平台的成品并附到 Release。
-
-如果想在自己电脑上手动打包：
-
-```bash
-pip install -r md2pdf_app/requirements.txt pyinstaller
-python build_app.py
-```
-
-macOS 输出在 `dist/HuanMo.app`，Windows 输出在 `dist/HuanMo.exe`。
+1. 下载或克隆项目
+2. macOS 双击 `md2pdf_app/启动.command`，Windows 双击 `md2pdf_app/启动.bat`
+3. 脚本会自动安装依赖并打开浏览器，访问 `http://127.0.0.1:5199`
 
 ## 使用说明
 
-| 区域 | 功能 |
+### 文档转 PDF
+
+1. 顶部选择「文档转 PDF」
+2. 拖入或点击选择 `.md` / `.txt` / `.docx` 文件（可多选）
+3. 确认输出目录（默认 `~/Downloads`）
+4. 点击「开始转换」
+5. 在结果列表点「打开」查看生成的 PDF
+
+### 合并 PDF
+
+1. 顶部切换到「合并 PDF」
+2. 拖入两个或更多 `.pdf` 文件
+3. 自动显示所有页面缩略图：
+   - 点击页面可放大浏览
+   - 点页面右上角 × 删除不需要的页
+   - 拖动页面卡片调整顺序
+4. 点击「开始合并」
+5. 在结果列表点「打开」查看合并后的 PDF
+
+## 支持的文件
+
+| 类型 | 说明 |
 |------|------|
-| 模式切换 | 「文档转 PDF」转换文档，「合并 PDF」合并多个 PDF |
-| 拖拽区 | 按当前模式拖入对应文件，或点击选择 |
-| 文件列表 | 查看已选文件，点「移除」删掉不需要的 |
-| 页面编辑器 | 合并模式下列出所有 PDF 页面，点击放大浏览，点 × 删除，拖拽调整顺序 |
-| 输出目录 | PDF 保存位置，默认 `~/Downloads` |
-| 转换按钮 | 文档模式批量转换，PDF 模式一键合并 |
-| 结果列表 | 显示转换结果，点击「打开」查看 PDF |
+| `.md` `.markdown` | Markdown 文档，保留标题、表格、代码块、引用 |
+| `.txt` `.text` | 纯文本，保留原始换行和空白 |
+| `.docx` | Word 文档，保留标题、粗体、斜体和简单表格 |
+| `.pdf` | 合并模式下使用，支持预览、删页、排序 |
 
 ## 常见问题
 
-**Q: `pip install` 是什么？为什么不直接把依赖放在项目里？**
+**问：需要联网吗？**
 
-换墨依赖了几个开源 Python 库（Flask 做网页、fpdf2 生成 PDF 等）。`requirements.txt` 是购物清单，`pip install -r requirements.txt` 就是照单采购。不把这些库的代码打包进项目是因为：
-- 保持项目体积小（只有自己的代码）
-- 依赖库各自独立更新，有问题可以单独升级
+不需要。转换和合并都在本地完成。
 
-**Q: macOS 双击 `启动.command` 提示"无法打开"？**
+**问：需要安装 Python 吗？**
 
-右键点击文件 → 按住 `Option` 键 →「打开」→「打开」。只需操作一次。
+不需要。直接下载 Releases 里的成品即可。只有从源码运行时才需要 Python。
 
-**Q: PDF 里中文显示为方块？**
+**问：PDF 页面没有缩略图？**
 
-系统缺少中文字体。macOS / Windows 一般已自带。Linux 用户请安装：
+从 Releases 下载的成品自带预览功能。源码运行时如果预览渲染库没有安装，只会看不到缩略图，合并功能仍可使用。
 
-```bash
-sudo apt install fonts-wqy-zenhei
-```
+**问：PDF 合并失败？**
 
-**Q: 端口被占用？**
+加密的 PDF 需要先解除密码保护，换墨无法合并加密文件。
 
-编辑 `app.py`，将底部 `port = 5199` 改为其他端口号。
+**问：提示端口被占用？**
 
-**Q: DOCX 转换后格式不对？**
+说明已经有另一个换墨在运行。关闭旧窗口后重试，或修改 `md2pdf_app/app.py` 里的端口号 `5199`。
 
-python-docx 对复杂表格（合并单元格等）和图片不支持。简单文档可正常转换。
+**问：PDF 里中文显示为方块？**
 
-**Q: PDF 合并失败？**
+系统缺少中文字体。macOS 和 Windows 一般自带，Linux 用户可安装 `fonts-wqy-zenhei`。
 
-加密的 PDF 需要先解除密码保护，无法直接合并；请确保选择的是普通可阅读的 PDF。
+**问：Word 转 PDF 格式不完美？**
 
-**Q: PDF 页面没有预览图？**
-
-预览渲染依赖 `pypdfium2`。启动脚本会自动安装，如果手动启动，请先执行 `pip install pypdfium2`。没有预览时仍可正常合并，只是看不到页面缩略图。
-
-**Q: 我不想安装 Python，能直接用吗？**
-
-可以。到 GitHub Releases 下载对应系统的成品（macOS 的 `.app` 或 Windows 的 `.exe`），双击即可运行，无需安装任何环境。
-
-**Q: macOS 打开成品提示“无法验证开发者”？**
-
-成品尚未做 Apple 签名，首次打开时请右键点击 `HuanMo.app` → 选择「打开」→ 再次点击「打开」即可。
-
-## 项目结构
-
-```
-huanmo/
-├── README.md
-└── md2pdf_app/
-    ├── app.py            # 主程序（Flask + 前端 + 转换引擎，约 700 行）
-    ├── requirements.txt  # Python 依赖清单
-    ├── 启动.command       # macOS 一键启动
-    └── 启动.bat           # Windows 一键启动
-```
-
-## 技术栈
-
-| 组件 | 用途 |
-|------|------|
-| [Flask](https://github.com/pallets/flask) | Web 服务 |
-| [markdown-it-py](https://github.com/executablebooks/markdown-it-py) | Markdown 解析 |
-| [python-docx](https://github.com/python-openxml/python-docx) | DOCX 解析 |
-| [fpdf2](https://github.com/py-pdf/fpdf2) | PDF 生成 |
-| [pypdf](https://github.com/py-pdf/pypdf) | PDF 合并 |
-| [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) | PDF 页面预览渲染 |
-| 系统 CJK 字体 | 中文渲染（自动检测） |
+复杂表格（合并单元格）和图片暂时不支持，简单文档可以正常转换。
 
 ## License
 
