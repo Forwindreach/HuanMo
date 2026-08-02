@@ -310,6 +310,61 @@ def merge_selected_pages(pdf_items: list[tuple[str, bytes]], order: list[tuple[s
     return out.getvalue()
 
 
+def _bitmap_to_png(bitmap) -> bytes:
+    """Encode a pypdfium2 bitmap as PNG without requiring Pillow."""
+    import struct
+    import zlib
+
+    width = bitmap.width
+    height = bitmap.height
+    stride = bitmap.stride
+    channels = bitmap.n_channels
+    mode = getattr(bitmap, "mode", "") or ""
+    data = bytes(bitmap.buffer)
+
+    swap_rb = mode.startswith("BGR")
+    has_alpha = "A" in mode or channels == 4
+
+    raw = bytearray()
+    for y in range(height):
+        row_start = y * stride
+        row = data[row_start:row_start + width * channels]
+        raw.append(0)  # PNG filter type: None
+        if channels == 4:
+            if swap_rb:
+                for x in range(width):
+                    i = x * 4
+                    raw += bytes((row[i + 2], row[i + 1], row[i], row[i + 3]))
+            else:
+                raw += row
+        elif channels == 3:
+            if swap_rb:
+                for x in range(width):
+                    i = x * 3
+                    raw += bytes((row[i + 2], row[i + 1], row[i]))
+            else:
+                raw += row
+        else:
+            raw += row
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + tag
+            + payload
+            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+        )
+
+    color_type = 6 if has_alpha else (2 if channels >= 3 else 0)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+        + chunk(b"IEND", b"")
+    )
+
+
 def render_page_preview(pdf_bytes: bytes, page_index: int, max_width: int = 560) -> bytes | None:
     """Render one PDF page as a PNG preview."""
     if pdfium is None:
@@ -317,14 +372,15 @@ def render_page_preview(pdf_bytes: bytes, page_index: int, max_width: int = 560)
     pdf = pdfium.PdfDocument(BytesIO(pdf_bytes))
     try:
         page = pdf[page_index]
-        bitmap = page.render(scale=2.0)
-        pil = bitmap.to_pil()
-        if pil.width > max_width:
-            ratio = max_width / pil.width
-            pil = pil.resize((max_width, round(pil.height * ratio)))
-        out = BytesIO()
-        pil.save(out, format="PNG")
-        return out.getvalue()
+        try:
+            page_width, _ = page.get_size()
+        except Exception:
+            page_width = 595.0
+        scale = 2.0
+        if page_width and page_width * scale > max_width:
+            scale = max_width / page_width
+        bitmap = page.render(scale=scale)
+        return _bitmap_to_png(bitmap)
     finally:
         pdf.close()
 
@@ -817,7 +873,8 @@ function renderMergeList() {
     if (meta && meta.preview) {
       preview = `<img src="/page-preview/${encodeURIComponent(meta.token)}/${p.page}" alt="${esc(p.file)} 第 ${p.page + 1} 页" loading="lazy">`;
     } else {
-      preview = `<div class="page-placeholder">第 ${p.page + 1} 页</div>`;
+      const reason = meta && meta.preview_error ? ` title="${esc(meta.preview_error)}"` : '';
+      preview = `<div class="page-placeholder"${reason}>第 ${p.page + 1} 页</div>`;
     }
 
     card.innerHTML = `
@@ -1139,16 +1196,20 @@ def analyze_pdf():
     token = base64.urlsafe_b64encode(os.urandom(9)).decode("ascii").rstrip("=")
     preview_dir = _PREVIEW_DIR / token
     preview_ok = False
+    preview_error = ""
     try:
         preview_dir.mkdir(parents=True, exist_ok=True)
         for i in range(page_count):
             png = render_page_preview(raw, i)
             if png is None:
+                preview_error = "预览渲染库不可用，请确认已安装 pypdfium2"
                 break
             (preview_dir / f"{i}.png").write_bytes(png)
         preview_ok = (preview_dir / "0.png").is_file()
-    except Exception:
+    except Exception as e:
         preview_ok = False
+        preview_error = f"{type(e).__name__}: {e}"
+        log.warning("PDF 预览失败 %s: %s", name, preview_error)
 
     _preview_cache[token] = {"name": name, "dir": str(preview_dir)}
     return jsonify({
@@ -1156,6 +1217,7 @@ def analyze_pdf():
         "pages": page_count,
         "token": token,
         "preview": preview_ok,
+        "preview_error": preview_error,
     })
 
 
