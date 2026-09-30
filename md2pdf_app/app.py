@@ -430,7 +430,10 @@ def _find_document_corners(image):
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     image_area = work.shape[0] * work.shape[1]
     for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:20]:
-        if cv2.contourArea(contour) < image_area * 0.18:
+        # A page photographed for scanning should occupy a substantial part of
+        # the frame. A lower threshold mistakes tables, photos or colored boxes
+        # inside the page for the page itself and crops away real content.
+        if cv2.contourArea(contour) < image_area * 0.35:
             break
         perimeter = cv2.arcLength(contour, True)
         polygon = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
@@ -469,7 +472,7 @@ def _warp_document(image, corners):
     )
 
 
-def process_scanned_image(raw: bytes) -> tuple[bytes, dict]:
+def process_scanned_image(raw: bytes, style: str = "original") -> tuple[bytes, dict]:
     """Crop, deskew, orient and enhance a photographed document."""
     if cv2 is None or np is None:
         raise RuntimeError("文档扫描组件不可用，请安装 opencv-python-headless 和 numpy")
@@ -477,6 +480,8 @@ def process_scanned_image(raw: bytes) -> tuple[bytes, dict]:
         raise ValueError("图片内容为空")
     if len(raw) > 30 * 1024 * 1024:
         raise ValueError("单张图片不能超过 30 MB")
+    if style not in {"original", "color", "bw"}:
+        raise ValueError("不支持的扫描效果")
 
     image = None
     if Image is not None and ImageOps is not None:
@@ -507,20 +512,38 @@ def process_scanned_image(raw: bytes) -> tuple[bytes, dict]:
     if corners is not None:
         image = _warp_document(image, corners)
 
-    # Phone EXIF orientation is applied by OpenCV. Most paper documents are
-    # portrait, so normalize a clearly landscape result as a final safeguard.
+    # ImageOps.exif_transpose already applies the phone's recorded orientation.
+    # Do not force landscape pages into portrait; users can rotate a page from
+    # the preview when its EXIF data is absent or incorrect.
     auto_rotated = False
-    if image.shape[1] > image.shape[0] * 1.15:
-        image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
-        auto_rotated = True
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.bilateralFilter(gray, 7, 35, 35)
-    enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(denoised)
-    blurred = cv2.GaussianBlur(enhanced, (0, 0), 1.0)
-    enhanced = cv2.addWeighted(enhanced, 1.45, blurred, -0.45, 0)
+    if style == "original":
+        enhanced = image
+    elif style == "color":
+        # Enhance luminance only so colored ink, stamps and photos keep their hue.
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        lightness, channel_a, channel_b = cv2.split(lab)
+        lightness = cv2.bilateralFilter(lightness, 5, 25, 25)
+        lightness = cv2.createCLAHE(clipLimit=1.35, tileGridSize=(8, 8)).apply(lightness)
+        blurred = cv2.GaussianBlur(lightness, (0, 0), 0.9)
+        lightness = cv2.addWeighted(lightness, 1.22, blurred, -0.22, 0)
+        enhanced = cv2.cvtColor(
+            cv2.merge((lightness, channel_a, channel_b)),
+            cv2.COLOR_LAB2BGR,
+        )
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.bilateralFilter(gray, 7, 35, 35)
+        enhanced = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            35,
+            13,
+        )
 
-    ok, encoded = cv2.imencode(".jpg", enhanced, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    ok, encoded = cv2.imencode(".jpg", enhanced, [cv2.IMWRITE_JPEG_QUALITY, 95])
     if not ok:
         raise RuntimeError("扫描图片编码失败")
     return encoded.tobytes(), {
@@ -528,6 +551,7 @@ def process_scanned_image(raw: bytes) -> tuple[bytes, dict]:
         "height": int(enhanced.shape[0]),
         "perspective_corrected": perspective_corrected,
         "auto_rotated": auto_rotated,
+        "style": style,
     }
 
 
@@ -541,7 +565,7 @@ def scanned_images_to_pdf(image_paths: list[Path]) -> bytes:
     margin = 8.0
 
     for image_path in image_paths:
-        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
         if image is None:
             raise ValueError("扫描页面不存在或已过期")
         height, width = image.shape[:2]
@@ -635,6 +659,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .drop-zone .icon { font-size: 40px; margin-bottom: 12px; }
   .drop-zone p { color: var(--secondary); font-size: 15px; }
   .drop-zone .browse { color: var(--accent); font-weight: 500; }
+
+  .scan-options {
+    display: none; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 10px;
+    padding: 12px 16px; margin: -8px 0 20px;
+  }
+  .scan-options.visible { display: flex; }
+  .scan-options label { font-size: 14px; font-weight: 500; white-space: nowrap; }
+  .scan-options select {
+    flex: 1; padding: 9px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: #fff; font-size: 14px;
+  }
+  .scan-options .hint { color: var(--secondary); font-size: 12px; }
 
   /* File list */
   .file-list {
@@ -824,6 +861,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
   <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,.heic,.heif" multiple>
 
+  <div class="scan-options" id="scanOptions">
+    <label for="scanStyle">扫描效果</label>
+    <select id="scanStyle">
+      <option value="original" selected>保留原色（推荐）</option>
+      <option value="color">彩色增强</option>
+      <option value="bw">黑白扫描</option>
+    </select>
+    <span class="hint">添加图片后锁定</span>
+  </div>
+
   <!-- File list -->
   <div class="file-list" id="fileList">
     <div class="file-list-header">已选文件 (<span id="fileCount">0</span>)</div>
@@ -884,6 +931,8 @@ const pageEditorTitle = document.getElementById('pageEditorTitle');
 const lightbox = document.getElementById('lightbox');
 const lightboxImg = document.getElementById('lightboxImg');
 const lightboxClose = document.getElementById('lightboxClose');
+const scanOptions = document.getElementById('scanOptions');
+const scanStyle = document.getElementById('scanStyle');
 
 let files = new Map(); // name -> content (base64)
 let mode = 'convert';
@@ -898,6 +947,7 @@ function setMode(nextMode) {
   modeSwitch.querySelectorAll('.mode-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
   });
+  scanOptions.classList.toggle('visible', mode === 'scan');
 
   if (mode === 'merge') {
     dropHint.textContent = '.pdf 文件（可多选）';
@@ -992,7 +1042,7 @@ async function addScanFiles(fileList) {
       const resp = await fetch('/analyze-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: f.name, content: b64 }),
+        body: JSON.stringify({ name: f.name, content: b64, style: scanStyle.value }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || '扫描处理失败');
@@ -1073,8 +1123,9 @@ function renderFileList() {
       extra = meta ? `${meta.pages} 页 · 保留 ${kept} 页` : '读取中…';
     } else if (mode === 'scan') {
       const meta = pdfMeta.get(name);
+      const styleLabels = { original: '保留原色', color: '彩色增强', bw: '黑白扫描' };
       extra = meta
-        ? `${meta.perspective_corrected ? '已校正透视' : '未检测到纸张边缘'} · 已增强`
+        ? `${meta.perspective_corrected ? '已校正透视' : '未检测到纸张边缘'} · ${styleLabels[meta.style] || '保留原色'}`
         : '自动处理中…';
     }
     div.innerHTML = `
@@ -1085,6 +1136,7 @@ function renderFileList() {
     i++;
   }
   fileCount.textContent = files.size;
+  scanStyle.disabled = mode === 'scan' && files.size > 0;
   const ready = mode === 'merge'
     ? (files.size >= 2 && pageOrder.length > 0)
     : mode === 'scan'
@@ -1578,9 +1630,10 @@ def page_preview(token, page):
 def analyze_image():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "scan.jpg")
+    style = data.get("style", "original")
     try:
         raw = base64.b64decode(data.get("content", ""), validate=True)
-        processed, metadata = process_scanned_image(raw)
+        processed, metadata = process_scanned_image(raw, style=style)
     except (ValueError, TypeError) as e:
         return jsonify({"error": f"图片读取失败: {e}"}), 400
     except Exception as e:
@@ -1620,12 +1673,12 @@ def rotate_scan(token):
         return jsonify({"error": "旋转方向无效"}), 400
 
     path = Path(info["path"])
-    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE) if cv2 is not None else None
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED) if cv2 is not None else None
     if image is None:
         return jsonify({"error": "扫描页面读取失败"}), 500
     rotation = cv2.ROTATE_90_COUNTERCLOCKWISE if direction == "left" else cv2.ROTATE_90_CLOCKWISE
     image = cv2.rotate(image, rotation)
-    ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
     if not ok:
         return jsonify({"error": "扫描页面旋转失败"}), 500
     path.write_bytes(encoded.tobytes())
