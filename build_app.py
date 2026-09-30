@@ -22,6 +22,10 @@ def main() -> int:
         "HuanMo",
         "--collect-all",
         "pypdfium2",
+        "--collect-all",
+        "cv2",
+        "--collect-all",
+        "pillow_heif",
         str(APP),
     ]
     if platform.system() == "Darwin":

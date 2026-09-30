@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 换墨 — 文档格式转换器
-支持 Markdown / TXT / DOCX → PDF，以及 PDF 合并
+支持 Markdown / TXT / DOCX → PDF、文档扫描，以及 PDF 合并
 启动后自动打开浏览器，拖拽文件即可转换。
 """
 
@@ -48,6 +48,21 @@ try:
     import pypdfium2 as pdfium
 except ImportError:
     pdfium = None
+
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    cv2 = None
+    np = None
+
+try:
+    from PIL import Image, ImageOps
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    Image = None
+    ImageOps = None
 
 # ── Logging ───────────────────────────────────────────────────
 logging.getLogger("fpdf").setLevel(logging.ERROR)
@@ -385,6 +400,168 @@ def render_page_preview(pdf_bytes: bytes, page_index: int, max_width: int = 560)
         pdf.close()
 
 
+def _order_document_corners(points):
+    """Return four points in top-left, top-right, bottom-right, bottom-left order."""
+    ordered = np.zeros((4, 2), dtype="float32")
+    sums = points.sum(axis=1)
+    diffs = np.diff(points, axis=1).reshape(-1)
+    ordered[0] = points[np.argmin(sums)]
+    ordered[2] = points[np.argmax(sums)]
+    ordered[1] = points[np.argmin(diffs)]
+    ordered[3] = points[np.argmax(diffs)]
+    return ordered
+
+
+def _find_document_corners(image):
+    """Detect the largest page-like quadrilateral in an image."""
+    height, width = image.shape[:2]
+    scale = min(1.0, 1400.0 / max(height, width))
+    work = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    median = float(np.median(gray))
+    low = int(max(0, 0.66 * median))
+    high = int(min(255, max(low + 30, 1.33 * median)))
+    edges = cv2.Canny(gray, low, high)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    image_area = work.shape[0] * work.shape[1]
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:20]:
+        if cv2.contourArea(contour) < image_area * 0.18:
+            break
+        perimeter = cv2.arcLength(contour, True)
+        polygon = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+        if len(polygon) == 4 and cv2.isContourConvex(polygon):
+            return polygon.reshape(4, 2).astype("float32") / scale
+    return None
+
+
+def _warp_document(image, corners):
+    rect = _order_document_corners(corners)
+    top_left, top_right, bottom_right, bottom_left = rect
+    width = int(max(
+        np.linalg.norm(bottom_right - bottom_left),
+        np.linalg.norm(top_right - top_left),
+    ))
+    height = int(max(
+        np.linalg.norm(top_right - bottom_right),
+        np.linalg.norm(top_left - bottom_left),
+    ))
+    if width < 64 or height < 64:
+        return image
+
+    destination = np.array([
+        [0, 0],
+        [width - 1, 0],
+        [width - 1, height - 1],
+        [0, height - 1],
+    ], dtype="float32")
+    matrix = cv2.getPerspectiveTransform(rect, destination)
+    return cv2.warpPerspective(
+        image,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+
+def process_scanned_image(raw: bytes) -> tuple[bytes, dict]:
+    """Crop, deskew, orient and enhance a photographed document."""
+    if cv2 is None or np is None:
+        raise RuntimeError("文档扫描组件不可用，请安装 opencv-python-headless 和 numpy")
+    if not raw:
+        raise ValueError("图片内容为空")
+    if len(raw) > 30 * 1024 * 1024:
+        raise ValueError("单张图片不能超过 30 MB")
+
+    image = None
+    if Image is not None and ImageOps is not None:
+        try:
+            with Image.open(BytesIO(raw)) as source:
+                source = ImageOps.exif_transpose(source).convert("RGB")
+                image = cv2.cvtColor(np.asarray(source), cv2.COLOR_RGB2BGR)
+        except Exception:
+            image = None
+    if image is None:
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("无法识别图片格式")
+
+    original_height, original_width = image.shape[:2]
+    if min(original_height, original_width) < 120:
+        raise ValueError("图片尺寸过小，无法生成清晰文档")
+
+    # Keep processing predictable for very large phone photos while retaining
+    # enough pixels for a sharp A4 page.
+    max_input_side = 3600
+    if max(image.shape[:2]) > max_input_side:
+        ratio = max_input_side / max(image.shape[:2])
+        image = cv2.resize(image, None, fx=ratio, fy=ratio, interpolation=cv2.INTER_AREA)
+
+    corners = _find_document_corners(image)
+    perspective_corrected = corners is not None
+    if corners is not None:
+        image = _warp_document(image, corners)
+
+    # Phone EXIF orientation is applied by OpenCV. Most paper documents are
+    # portrait, so normalize a clearly landscape result as a final safeguard.
+    auto_rotated = False
+    if image.shape[1] > image.shape[0] * 1.15:
+        image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+        auto_rotated = True
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.bilateralFilter(gray, 7, 35, 35)
+    enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(denoised)
+    blurred = cv2.GaussianBlur(enhanced, (0, 0), 1.0)
+    enhanced = cv2.addWeighted(enhanced, 1.45, blurred, -0.45, 0)
+
+    ok, encoded = cv2.imencode(".jpg", enhanced, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        raise RuntimeError("扫描图片编码失败")
+    return encoded.tobytes(), {
+        "width": int(enhanced.shape[1]),
+        "height": int(enhanced.shape[0]),
+        "perspective_corrected": perspective_corrected,
+        "auto_rotated": auto_rotated,
+    }
+
+
+def scanned_images_to_pdf(image_paths: list[Path]) -> bytes:
+    """Place enhanced scan images on A4 pages and return a PDF."""
+    if cv2 is None:
+        raise RuntimeError("文档扫描组件不可用")
+    pdf = FPDF(unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=False)
+    page_width, page_height = 210.0, 297.0
+    margin = 8.0
+
+    for image_path in image_paths:
+        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise ValueError("扫描页面不存在或已过期")
+        height, width = image.shape[:2]
+        scale = min((page_width - 2 * margin) / width, (page_height - 2 * margin) / height)
+        draw_width = width * scale
+        draw_height = height * scale
+        x = (page_width - draw_width) / 2
+        y = (page_height - draw_height) / 2
+        pdf.add_page()
+        pdf.image(str(image_path), x=x, y=y, w=draw_width, h=draw_height)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    try:
+        tmp.close()
+        pdf.output(tmp.name)
+        return Path(tmp.name).read_bytes()
+    finally:
+        os.unlink(tmp.name)
+
+
 # ── Flask App ─────────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -587,6 +764,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     box-shadow: 0 1px 3px rgba(0,0,0,0.18);
   }
   .page-delete:hover { background: #fff0f0; }
+  .scan-actions {
+    display: flex; gap: 4px; position: absolute; left: 10px; bottom: 27px;
+  }
+  .scan-rotate {
+    width: 25px; height: 24px; border: 1px solid rgba(0,0,0,0.12);
+    border-radius: 6px; background: rgba(255,255,255,0.94);
+    color: var(--text); cursor: pointer; font-size: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  }
+  .scan-rotate:hover { background: #fff; border-color: var(--accent); }
   .page-empty {
     grid-column: 1 / -1; text-align: center;
     color: var(--secondary); font-size: 14px; padding: 24px 0;
@@ -622,10 +809,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>换墨</h1>
-  <p class="subtitle">Markdown / TXT / DOCX → PDF · PDF 合并 · 中文字体自动检测</p>
+  <p class="subtitle">文档转 PDF · 文档扫描 · PDF 合并 · 全程本地处理</p>
 
   <div class="mode-switch" id="modeSwitch">
     <button type="button" class="mode-btn active" data-mode="convert">文档转 PDF</button>
+    <button type="button" class="mode-btn" data-mode="scan">文档扫描</button>
     <button type="button" class="mode-btn" data-mode="merge">合并 PDF</button>
   </div>
 
@@ -634,7 +822,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#86868b" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg></div>
     <p>拖拽 <strong id="dropHint">.md / .txt / .docx 文件</strong> 到此处<br>或 <span class="browse">点击浏览</span></p>
   </div>
-  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.docx,.pdf" multiple>
+  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,.heic,.heif" multiple>
 
   <!-- File list -->
   <div class="file-list" id="fileList">
@@ -642,9 +830,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="fileItems"></div>
   </div>
 
-  <!-- Page editor (merge mode) -->
+  <!-- Page editor (merge and scan modes) -->
   <div class="page-editor" id="pageEditor">
-    <div class="page-editor-header">合并页面（<span id="pageCount">0</span> 页）· 拖拽排序 · 点击 × 删除</div>
+    <div class="page-editor-header"><span id="pageEditorTitle">合并页面</span>（<span id="pageCount">0</span> 页）· 拖拽排序 · 点击 × 删除</div>
     <div class="page-list" id="pageList"></div>
   </div>
 
@@ -692,6 +880,7 @@ const resultsHeader = document.getElementById('resultsHeader');
 const pageEditor = document.getElementById('pageEditor');
 const pageList = document.getElementById('pageList');
 const pageCountEl = document.getElementById('pageCount');
+const pageEditorTitle = document.getElementById('pageEditorTitle');
 const lightbox = document.getElementById('lightbox');
 const lightboxImg = document.getElementById('lightboxImg');
 const lightboxClose = document.getElementById('lightboxClose');
@@ -715,6 +904,14 @@ function setMode(nextMode) {
     fileInput.accept = '.pdf';
     btnText.textContent = '开始合并';
     resultsHeader.textContent = '合并结果';
+    pageEditorTitle.textContent = '合并页面';
+    pageEditor.classList.add('visible');
+  } else if (mode === 'scan') {
+    dropHint.textContent = '手机拍摄的文档图片（可多选）';
+    fileInput.accept = '.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,.heic,.heif,image/*';
+    btnText.textContent = '生成扫描 PDF';
+    resultsHeader.textContent = '扫描结果';
+    pageEditorTitle.textContent = '扫描页面';
     pageEditor.classList.add('visible');
   } else {
     dropHint.textContent = '.md / .txt / .docx 文件';
@@ -758,6 +955,10 @@ async function addFiles(fileList) {
     await addPdfFiles(fileList);
     return;
   }
+  if (mode === 'scan') {
+    await addScanFiles(fileList);
+    return;
+  }
 
   for (const f of fileList) {
     if (!isAccepted(f.name)) continue;
@@ -767,6 +968,46 @@ async function addFiles(fileList) {
       renderFileList();
     };
     reader.readAsDataURL(f);
+  }
+}
+
+async function addScanFiles(fileList) {
+  for (const f of fileList) {
+    if (!isAccepted(f.name)) continue;
+    if (files.has(f.name)) {
+      alert(`已存在同名图片：${f.name}`);
+      continue;
+    }
+
+    const reader = new FileReader();
+    const b64 = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = () => reject(new Error('读取图片失败'));
+      reader.readAsDataURL(f);
+    });
+
+    files.set(f.name, b64);
+    renderFileList();
+    try {
+      const resp = await fetch('/analyze-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: f.name, content: b64 }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || '扫描处理失败');
+      data.preview = true;
+      data.version = Date.now();
+      pdfMeta.set(f.name, data);
+      files.set(f.name, ''); // processed preview is cached by the local server
+      pageOrder.push({ id: `${f.name}::scan`, file: f.name, page: 0 });
+    } catch (err) {
+      alert(`${f.name} 处理失败：${err.message}`);
+      files.delete(f.name);
+      pdfMeta.delete(f.name);
+    }
+    renderFileList();
+    renderMergeList();
   }
 }
 
@@ -815,6 +1056,7 @@ async function addPdfFiles(fileList) {
 function isAccepted(name) {
   const lower = name.toLowerCase();
   if (mode === 'merge') return lower.endsWith('.pdf');
+  if (mode === 'scan') return /\.(jpe?g|png|webp|bmp|tiff?|heic|heif)$/.test(lower);
   return lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt') || lower.endsWith('.text') || lower.endsWith('.docx');
 }
 
@@ -829,6 +1071,11 @@ function renderFileList() {
       const meta = pdfMeta.get(name);
       const kept = pageOrder.filter(p => p.file === name).length;
       extra = meta ? `${meta.pages} 页 · 保留 ${kept} 页` : '读取中…';
+    } else if (mode === 'scan') {
+      const meta = pdfMeta.get(name);
+      extra = meta
+        ? `${meta.perspective_corrected ? '已校正透视' : '未检测到纸张边缘'} · 已增强`
+        : '自动处理中…';
     }
     div.innerHTML = `
       <div class="name"><span>${esc(name)}</span><span class="file-info">${extra}</span></div>
@@ -838,7 +1085,11 @@ function renderFileList() {
     i++;
   }
   fileCount.textContent = files.size;
-  const ready = mode === 'merge' ? (files.size >= 2 && pageOrder.length > 0) : files.size > 0;
+  const ready = mode === 'merge'
+    ? (files.size >= 2 && pageOrder.length > 0)
+    : mode === 'scan'
+      ? (files.size > 0 && pageOrder.length > 0 && pdfMeta.size === files.size)
+      : files.size > 0;
   fileList.classList.toggle('has-files', files.size > 0);
   btnConvert.disabled = !ready;
 
@@ -858,7 +1109,7 @@ function renderMergeList() {
   pageCountEl.textContent = pageOrder.length;
   pageList.innerHTML = '';
   if (pageOrder.length === 0) {
-    pageList.innerHTML = '<div class="page-empty">暂无页面，请先添加 PDF 文件</div>';
+    pageList.innerHTML = `<div class="page-empty">${mode === 'scan' ? '暂无页面，请先添加文档图片' : '暂无页面，请先添加 PDF 文件'}</div>`;
     return;
   }
 
@@ -870,17 +1121,25 @@ function renderMergeList() {
     card.dataset.id = p.id;
 
     let preview;
-    if (meta && meta.preview) {
+    if (mode === 'scan' && meta && meta.preview) {
+      preview = `<img src="/scan-preview/${encodeURIComponent(meta.token)}?v=${meta.version || 0}" alt="${esc(p.file)} 扫描预览" loading="lazy">`;
+    } else if (meta && meta.preview) {
       preview = `<img src="/page-preview/${encodeURIComponent(meta.token)}/${p.page}" alt="${esc(p.file)} 第 ${p.page + 1} 页" loading="lazy">`;
     } else {
       const reason = meta && meta.preview_error ? ` title="${esc(meta.preview_error)}"` : '';
       preview = `<div class="page-placeholder"${reason}>第 ${p.page + 1} 页</div>`;
     }
 
+    const scanActions = mode === 'scan' ? `
+      <div class="scan-actions">
+        <button class="scan-rotate" data-direction="left" title="向左旋转">↶</button>
+        <button class="scan-rotate" data-direction="right" title="向右旋转">↷</button>
+      </div>` : '';
     card.innerHTML = `
       ${preview}
       <button class="page-delete" title="删除此页">×</button>
-      <div class="page-meta">${esc(p.file)} · ${p.page + 1} 页</div>
+      ${scanActions}
+      <div class="page-meta">${esc(p.file)}${mode === 'scan' ? '' : ` · ${p.page + 1} 页`}</div>
     `;
     pageList.appendChild(card);
   }
@@ -937,7 +1196,7 @@ pageList.addEventListener('dragend', () => {
   renderFileList();
 });
 
-pageList.addEventListener('click', e => {
+pageList.addEventListener('click', async e => {
   const del = e.target.closest('.page-delete');
   if (del) {
     const id = del.closest('.page-card').dataset.id;
@@ -947,12 +1206,38 @@ pageList.addEventListener('click', e => {
     return;
   }
 
+  const rotate = e.target.closest('.scan-rotate');
+  if (rotate) {
+    const card = rotate.closest('.page-card');
+    const page = pageOrder.find(x => x.id === card.dataset.id);
+    const meta = page && pdfMeta.get(page.file);
+    if (!meta) return;
+    rotate.disabled = true;
+    try {
+      const resp = await fetch(`/rotate-scan/${encodeURIComponent(meta.token)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction: rotate.dataset.direction }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || '旋转失败');
+      Object.assign(meta, data, { version: Date.now() });
+      renderMergeList();
+    } catch (err) {
+      alert(err.message);
+      rotate.disabled = false;
+    }
+    return;
+  }
+
   const card = e.target.closest('.page-card');
   if (!card) return;
   const p = pageOrder.find(x => x.id === card.dataset.id);
   const meta = p && pdfMeta.get(p.file);
   if (p && meta && meta.preview) {
-    lightboxImg.src = `/page-preview/${encodeURIComponent(meta.token)}/${p.page}`;
+    lightboxImg.src = mode === 'scan'
+      ? `/scan-preview/${encodeURIComponent(meta.token)}?v=${meta.version || 0}`
+      : `/page-preview/${encodeURIComponent(meta.token)}/${p.page}`;
     lightbox.classList.add('open');
   }
 });
@@ -967,6 +1252,10 @@ btnConvert.addEventListener('click', async () => {
   if (files.size === 0) return;
   if (mode === 'merge') {
     mergeFiles();
+    return;
+  }
+  if (mode === 'scan') {
+    scanFiles();
     return;
   }
 
@@ -1063,6 +1352,55 @@ async function mergeFiles() {
     itemDiv.innerHTML = `
       <span class="status">&#10007;</span>
       <div class="info"><div class="filename">合并失败</div><div class="size">${esc(err.message)}</div></div>
+    `;
+  }
+
+  results.classList.add('has-results');
+  btnConvert.classList.remove('loading');
+  btnConvert.disabled = false;
+}
+
+async function scanFiles() {
+  if (pageOrder.length === 0) {
+    alert('请至少保留一个扫描页面');
+    return;
+  }
+
+  btnConvert.classList.add('loading');
+  btnConvert.disabled = true;
+  results.classList.remove('has-results');
+  resultItems.innerHTML = '';
+
+  const itemDiv = document.createElement('div');
+  itemDiv.className = 'result-item';
+  itemDiv.innerHTML = `<span class="status">·</span><div class="info"><div class="filename">正在生成扫描 PDF…</div><div class="size">共 ${pageOrder.length} 页</div></div>`;
+  resultItems.appendChild(itemDiv);
+
+  try {
+    const pages = pageOrder.map(page => {
+      const meta = pdfMeta.get(page.file);
+      return { token: meta.token, name: page.file };
+    });
+    const resp = await fetch('/scan-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pages,
+        output_dir: outputDir.value.trim() || '{{ output_dir }}',
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '扫描 PDF 生成失败');
+    itemDiv.innerHTML = `
+      <span class="status">&#10003;</span>
+      <div class="info"><div class="filename">${esc(data.filename)}</div><div class="size">${data.pages} 页 · ${data.size_kb} KB</div></div>
+      <a class="open-btn" href="/download/${encodeURIComponent(data.token)}" target="_blank">打开</a>
+    `;
+  } catch (err) {
+    itemDiv.classList.add('error');
+    itemDiv.innerHTML = `
+      <span class="status">&#10007;</span>
+      <div class="info"><div class="filename">生成失败</div><div class="size">${esc(err.message)}</div></div>
     `;
   }
 
@@ -1175,6 +1513,10 @@ _PREVIEW_DIR = Path(tempfile.gettempdir()) / "huanmo_previews"
 _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 _preview_cache: dict[str, dict] = {}
 
+_SCAN_DIR = Path(tempfile.gettempdir()) / "huanmo_scans"
+_SCAN_DIR.mkdir(parents=True, exist_ok=True)
+_scan_cache: dict[str, dict] = {}
+
 
 @app.route("/analyze-pdf", methods=["POST"])
 def analyze_pdf():
@@ -1230,6 +1572,108 @@ def page_preview(token, page):
     if not path.is_file():
         return "预览不存在", 404
     return send_file(path, mimetype="image/png")
+
+
+@app.route("/analyze-image", methods=["POST"])
+def analyze_image():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "scan.jpg")
+    try:
+        raw = base64.b64decode(data.get("content", ""), validate=True)
+        processed, metadata = process_scanned_image(raw)
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": f"图片读取失败: {e}"}), 400
+    except Exception as e:
+        log.exception("扫描图片处理失败: %s", name)
+        return jsonify({"error": f"扫描处理失败: {e}"}), 500
+
+    token = base64.urlsafe_b64encode(os.urandom(12)).decode("ascii").rstrip("=")
+    image_path = _SCAN_DIR / f"{token}.jpg"
+    try:
+        image_path.write_bytes(processed)
+    except OSError as e:
+        return jsonify({"error": f"无法保存扫描预览: {e}"}), 500
+
+    _scan_cache[token] = {"name": name, "path": str(image_path)}
+    return jsonify({"name": name, "token": token, **metadata})
+
+
+@app.route("/scan-preview/<token>")
+def scan_preview(token):
+    info = _scan_cache.get(token)
+    if not info:
+        return "扫描预览不存在或已过期", 404
+    path = Path(info["path"])
+    if not path.is_file():
+        return "扫描预览不存在或已过期", 404
+    return send_file(path, mimetype="image/jpeg", max_age=0)
+
+
+@app.route("/rotate-scan/<token>", methods=["POST"])
+def rotate_scan(token):
+    info = _scan_cache.get(token)
+    if not info:
+        return jsonify({"error": "扫描页面不存在或已过期"}), 404
+    data = request.get_json(silent=True) or {}
+    direction = data.get("direction")
+    if direction not in {"left", "right"}:
+        return jsonify({"error": "旋转方向无效"}), 400
+
+    path = Path(info["path"])
+    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE) if cv2 is not None else None
+    if image is None:
+        return jsonify({"error": "扫描页面读取失败"}), 500
+    rotation = cv2.ROTATE_90_COUNTERCLOCKWISE if direction == "left" else cv2.ROTATE_90_CLOCKWISE
+    image = cv2.rotate(image, rotation)
+    ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        return jsonify({"error": "扫描页面旋转失败"}), 500
+    path.write_bytes(encoded.tobytes())
+    return jsonify({"width": int(image.shape[1]), "height": int(image.shape[0])})
+
+
+@app.route("/scan-pdf", methods=["POST"])
+def scan_pdf():
+    data = request.get_json(silent=True) or {}
+    pages = data.get("pages", [])
+    output_dir = data.get("output_dir", OUTPUT_DIR)
+    if not pages:
+        return jsonify({"error": "请至少保留一个扫描页面"}), 400
+    if len(pages) > 200:
+        return jsonify({"error": "单次最多生成 200 页扫描文档"}), 400
+
+    image_paths: list[Path] = []
+    for page in pages:
+        token = page.get("token") if isinstance(page, dict) else None
+        info = _scan_cache.get(token or "")
+        path = Path(info["path"]) if info else None
+        if path is None or not path.is_file():
+            return jsonify({"error": "有扫描页面不存在或已过期，请重新导入"}), 400
+        image_paths.append(path)
+
+    try:
+        pdf_bytes = scanned_images_to_pdf(image_paths)
+    except Exception as e:
+        log.exception("扫描 PDF 生成失败")
+        return jsonify({"error": f"扫描 PDF 生成失败: {e}"}), 500
+
+    out_path = Path(output_dir)
+    try:
+        out_path.mkdir(parents=True, exist_ok=True)
+        pdf_name = f"扫描文档_{time.strftime('%Y%m%d_%H%M%S')}.pdf"
+        pdf_path = out_path / pdf_name
+        pdf_path.write_bytes(pdf_bytes)
+    except OSError as e:
+        return jsonify({"error": f"写入文件失败: {e}"}), 500
+
+    download_token = base64.urlsafe_b64encode(str(pdf_path).encode()).decode()
+    _downloads[download_token] = str(pdf_path)
+    return jsonify({
+        "filename": pdf_name,
+        "size_kb": round(len(pdf_bytes) / 1024),
+        "pages": len(image_paths),
+        "token": download_token,
+    })
 
 
 @app.route("/merge-pdf", methods=["POST"])
@@ -1346,7 +1790,7 @@ def main():
     url = f"http://127.0.0.1:{port}"
 
     print("╔══════════════════════════════════════╗")
-    print("║      换墨 — 文档转换 + PDF 合并    ║")
+    print("║   换墨 — 文档转换 + 扫描 + 合并   ║")
     print("╠══════════════════════════════════════╣")
     print(f"║  浏览器地址: {url}          ║")
     print("║  按 Ctrl+C 停止服务                  ║")
