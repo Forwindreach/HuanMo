@@ -9,7 +9,7 @@
 ## Validation / 验证方式
 
 - [ ] `python -m py_compile md2pdf_app/app.py build_app.py`
-- [ ] `pytest -q`
+- [ ] `python -m pytest -q`
 - [ ] Manually tested relevant UI flows / 已手动验证相关界面流程
 
 ## Checklist / 检查清单

@@ -33,7 +33,7 @@ python md2pdf_app/app.py
 
 ```bash
 python -m py_compile md2pdf_app/app.py build_app.py
-pytest -q
+python -m pytest -q
 ```
 
 涉及界面时，请手动验证三个模式；涉及扫描算法时，请覆盖彩色、黑白、横向、透视和无明显纸张边缘的图片。
