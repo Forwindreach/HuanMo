@@ -1,0 +1,90 @@
+<svg width="1280" height="520" viewBox="0 0 1280 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="20" x2="1190" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08111F"/>
+      <stop offset="0.52" stop-color="#102341"/>
+      <stop offset="1" stop-color="#123A5B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#5AC8FA"/>
+      <stop offset="1" stop-color="#1677FF"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EAF4FF"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#020817" flood-opacity="0.45"/>
+    </filter>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="55"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="520" rx="28" fill="url(#bg)"/>
+  <circle cx="1140" cy="60" r="190" fill="#218BFF" fill-opacity="0.18" filter="url(#glow)"/>
+  <circle cx="120" cy="500" r="170" fill="#5AC8FA" fill-opacity="0.11" filter="url(#glow)"/>
+  <path d="M0 430C220 355 350 500 585 430C810 363 950 420 1280 320V520H0V430Z" fill="#5AC8FA" fill-opacity="0.045"/>
+
+  <g transform="translate(72 66)">
+    <rect width="150" height="42" rx="21" fill="#FFFFFF" fill-opacity="0.09" stroke="#FFFFFF" stroke-opacity="0.16"/>
+    <rect x="13" y="10" width="22" height="22" rx="6" fill="url(#accent)"/>
+    <path d="M19 15H28V18H22V27H19V15ZM25 21H31V27H25V21Z" fill="white"/>
+    <text x="46" y="28" fill="#D8ECFF" font-size="18" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">换墨 HUANMO</text>
+  </g>
+
+  <g transform="translate(72 145)">
+    <text fill="white" font-size="54" font-weight="750" letter-spacing="-1.8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+      <tspan x="0" y="52">把文档，换成</tspan>
+      <tspan x="0" y="120" fill="#6CCBFF">更好的样子。</tspan>
+    </text>
+    <text x="2" y="171" fill="#B9CDE0" font-size="21" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">文档转 PDF · 手机扫描 · PDF 页面级合并</text>
+    <text x="2" y="204" fill="#87A5BF" font-size="17" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">Private by design. Fast by default. Free and open source.</text>
+
+    <g transform="translate(0 244)" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="15" font-weight="600">
+      <rect width="116" height="38" rx="19" fill="#FFFFFF" fill-opacity="0.09"/>
+      <circle cx="21" cy="19" r="5" fill="#5DE2A5"/>
+      <text x="35" y="25" fill="#DCEBFA">完全本地</text>
+      <rect x="128" width="124" height="38" rx="19" fill="#FFFFFF" fill-opacity="0.09"/>
+      <circle cx="149" cy="19" r="5" fill="#6CCBFF"/>
+      <text x="163" y="25" fill="#DCEBFA">跨平台</text>
+      <rect x="264" width="132" height="38" rx="19" fill="#FFFFFF" fill-opacity="0.09"/>
+      <circle cx="285" cy="19" r="5" fill="#B89BFF"/>
+      <text x="299" y="25" fill="#DCEBFA">开源免费</text>
+    </g>
+  </g>
+
+  <g transform="translate(720 62)" filter="url(#shadow)">
+    <rect width="488" height="396" rx="24" fill="#F7F9FC"/>
+    <rect width="488" height="58" rx="24" fill="#FFFFFF"/>
+    <path d="M0 34C0 20.745 10.745 10 24 10H464C477.255 10 488 20.745 488 34V58H0V34Z" fill="#FFFFFF"/>
+    <circle cx="25" cy="29" r="6" fill="#FF6B6B"/>
+    <circle cx="45" cy="29" r="6" fill="#FFD166"/>
+    <circle cx="65" cy="29" r="6" fill="#4CD97B"/>
+    <text x="214" y="35" fill="#172236" font-size="17" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">换墨</text>
+
+    <g transform="translate(26 78)" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+      <rect width="436" height="48" rx="12" fill="#E8EDF4"/>
+      <rect x="146" y="4" width="144" height="40" rx="9" fill="url(#accent)"/>
+      <text x="34" y="30" fill="#66768A" font-size="14">文档转 PDF</text>
+      <text x="188" y="30" fill="white" font-size="14" font-weight="700">文档扫描</text>
+      <text x="341" y="30" fill="#66768A" font-size="14">合并 PDF</text>
+
+      <rect y="144" width="436" height="170" rx="16" fill="white" stroke="#AFC1D4" stroke-width="2" stroke-dasharray="7 7"/>
+      <g transform="translate(190 174)">
+        <path d="M6 0H36L50 14V56C50 61.523 45.523 66 40 66H6C0.477 66 -4 61.523 -4 56V10C-4 4.477 0.477 0 6 0Z" fill="url(#paper)" stroke="#7292AF" stroke-width="2"/>
+        <path d="M36 0V14H50" stroke="#7292AF" stroke-width="2"/>
+        <path d="M10 28H34M10 38H38M10 48H30" stroke="#2F80ED" stroke-width="3" stroke-linecap="round"/>
+      </g>
+      <text x="137" y="274" fill="#43566B" font-size="15" font-weight="600">拖入手机拍摄的文档图片</text>
+      <text x="170" y="300" fill="#2F80ED" font-size="14">自动校正并生成 PDF</text>
+
+      <rect y="332" width="436" height="42" rx="10" fill="#E9F2FF"/>
+      <text x="18" y="358" fill="#2F5F91" font-size="13">扫描效果</text>
+      <rect x="92" y="338" width="206" height="30" rx="8" fill="white" stroke="#C8D8E8"/>
+      <text x="108" y="358" fill="#26384B" font-size="13">保留原色（推荐）</text>
+      <circle cx="416" cy="353" r="10" fill="#E4F8EF"/>
+      <path d="M411 353L415 357L422 349" stroke="#20A66A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+</svg>

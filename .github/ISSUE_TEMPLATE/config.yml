@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability / 安全漏洞
+    url: https://github.com/Forwindreach/HuanMo/security
+    about: Please report vulnerabilities privately; do not open a public issue.
+  - name: Questions and ideas / 问题与想法
+    url: https://github.com/Forwindreach/HuanMo/discussions
+    about: Ask usage questions or discuss early-stage ideas.

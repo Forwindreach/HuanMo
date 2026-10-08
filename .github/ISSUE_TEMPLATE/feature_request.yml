@@ -1,0 +1,50 @@
+name: Feature request / 功能建议
+description: Propose an improvement grounded in a real workflow
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        好的功能建议从真实问题开始。请先描述你的工作流，再说明期望的结果。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow / 使用场景
+      description: What are you trying to accomplish, and what is difficult today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome / 期望结果
+      description: Describe the user-visible result rather than only an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / 已尝试的替代方案
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How often would you use it? / 使用频率
+      options:
+        - Daily / 每天
+        - Weekly / 每周
+        - Occasionally / 偶尔
+        - One-time need / 一次性需求
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution / 参与贡献
+      options:
+        - label: I would be willing to help test this feature.
+        - label: I would be willing to submit a pull request.
